@@ -409,7 +409,7 @@ while j < n_train:
             time_window_ms=time_window_ms,
             subsample_rate=subsample_rate
         )
-        print('alisdjflkasdjf')
+
         try:
             w_arr = np.array(connections['X1A2'].w, dtype=float)
             n_updates = 0
@@ -436,8 +436,6 @@ while j < n_train:
         with open(timing_updates_csv, 'a', newline='') as f:
             wcsv = csv.writer(f)
             wcsv.writerow([j, time.time(), n_updates, sum_abs_dw, max_abs_dw])
-
-        print('Applied')
         
         neuron_groups['X1'].rates = 0*b.hertz
         net['M1'].run(resting_time)

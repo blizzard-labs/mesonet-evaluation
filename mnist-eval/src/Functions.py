@@ -117,6 +117,206 @@ def get_recognized_number_proportion_for_10(assignments_for_10, spike_rates):
     summed_proportion = summed_rates/ np.sum(summed_rates)
     return summed_proportion
 
+
+def build_upstream_structures(connections_upstream):
+    """
+    Pre-build optimized data structures for upstream synapse lookups.
+    Call this once before processing pairs.
+    
+    Returns:
+        upstream_targets: dict mapping upstream_neuron -> set of target neurons
+        upstream_synapses: dict mapping (upstream_neuron, target_neuron) -> list of synapse indices
+        synapse_plasticity: array of plasticity values for each synapse
+    """
+    upstream_i = np.array(connections_upstream.i, dtype=int)
+    upstream_j = np.array(connections_upstream.j, dtype=int)
+    
+    # Extract plasticity values once
+    if hasattr(connections_upstream, 'eta_p'):
+        synapse_plasticity = np.array(connections_upstream.eta_p, dtype=float)
+    elif hasattr(connections_upstream, 'eta'):
+        synapse_plasticity = np.array(connections_upstream.eta, dtype=float)
+    else:
+        synapse_plasticity = np.zeros(len(upstream_i), dtype=float)
+    
+    # Build mapping: upstream neuron -> set of targets
+    upstream_targets = {}
+    # Build mapping: (upstream, target) -> list of synapse indices
+    upstream_synapses = {}
+    
+    for syn_idx, (u, target) in enumerate(zip(upstream_i, upstream_j)):
+        u_int = int(u)
+        target_int = int(target)
+        
+        upstream_targets.setdefault(u_int, set()).add(target_int)
+        upstream_synapses.setdefault((u_int, target_int), []).append(syn_idx)
+    
+    return upstream_targets, upstream_synapses, synapse_plasticity
+
+
+def find_best_upstream_synapse_optimized(pre1, pre2, upstream_structures):
+    """
+    Find the most plastic upstream synapse connecting to both pre1 and pre2.
+    
+    Args:
+        pre1, pre2: presynaptic neuron indices
+        upstream_structures: tuple of (upstream_targets, upstream_synapses, synapse_plasticity)
+    
+    Returns:
+        (best_syn_idx, best_eta) or (None, -inf) if no valid synapse found
+    """
+    upstream_targets, upstream_synapses, synapse_plasticity = upstream_structures
+    
+    # Find upstream neurons projecting to both pre1 and pre2
+    # Use set intersection for efficiency
+    upstream_to_pre1 = {u for u, targets in upstream_targets.items() if pre1 in targets}
+    upstream_to_pre2 = {u for u, targets in upstream_targets.items() if pre2 in targets}
+    common_upstream = upstream_to_pre1 & upstream_to_pre2
+    
+    if not common_upstream:
+        return None, -np.inf
+    
+    best_syn_idx = None
+    best_eta = -np.inf
+    
+    # For each common upstream neuron, find most plastic synapse
+    for u in common_upstream:
+        # Get all synapses from u to either pre1 or pre2
+        syns_to_pre1 = upstream_synapses.get((u, pre1), [])
+        syns_to_pre2 = upstream_synapses.get((u, pre2), [])
+        all_syns = syns_to_pre1 + syns_to_pre2
+        
+        if not all_syns:
+            continue
+        
+        # Find most plastic synapse from this upstream neuron
+        eta_vals = synapse_plasticity[all_syns]
+        local_max_idx = np.argmax(eta_vals)
+        local_eta = eta_vals[local_max_idx]
+        
+        if local_eta > best_eta:
+            best_eta = local_eta
+            best_syn_idx = all_syns[local_max_idx]
+    
+    return best_syn_idx, best_eta
+
+def process_pairs_optimized(candidate_pairs, syn_mismatch, connections_xa1, 
+                           connections_upstream, timing_threshold, epsilon_timing,
+                           A_plus=0.01, A_minus=-0.012, tau_plus=20.0, tau_minus=20.0):
+    """
+    Optimized pair processing with pre-built upstream structures.
+    """
+    def stdp_delta(delta_t_ms):
+        if np.isnan(delta_t_ms):
+            return 0.0
+        if delta_t_ms > 0:
+            return A_plus * np.exp(-delta_t_ms / tau_plus)
+        else:
+            return A_minus * np.exp(delta_t_ms / tau_minus)
+    
+    # Pre-build upstream structures ONCE
+    upstream_structures = build_upstream_structures(connections_upstream)
+    
+    applied_updates = []
+    w_arr = np.array(connections_upstream.w, dtype=float)  # Get weights once
+    
+    # Process candidate pairs
+    for s1, s2 in candidate_pairs:
+        m1 = syn_mismatch[s1]
+        m2 = syn_mismatch[s2]
+        
+        if np.isnan(m1) or np.isnan(m2) or abs(m1 - m2) > timing_threshold:
+            continue
+        
+        pre1 = int(connections_xa1.i[s1])
+        pre2 = int(connections_xa1.i[s2])
+        
+        # Find best upstream synapse (optimized)
+        best_syn_idx, best_eta = find_best_upstream_synapse_optimized(
+            pre1, pre2, upstream_structures
+        )
+        
+        if best_syn_idx is None:
+            continue
+        
+        # Compute and apply update
+        avg_mismatch = 0.5 * (m1 + m2)
+        stdp_dw = stdp_delta(avg_mismatch)
+        delta_w = float(epsilon_timing) * float(stdp_dw)
+        
+        w_arr[best_syn_idx] += delta_w
+        applied_updates.append((int(best_syn_idx), float(delta_w)))
+    
+    # Apply all weight updates at once
+    connections_upstream.w = w_arr
+    
+    return applied_updates
+
+
+def compute_synapse_mismatch_optimized(connections_xa1, pre_spikes, post_spikes):
+    """
+    Optimized computation of per-synapse timing mismatch.
+    
+    Args:
+        connections_xa1: synapse connections with .i (pre) and .j (post) indices
+        pre_spikes: dict mapping pre_neuron_idx -> array of spike times (ms)
+        post_spikes: dict mapping post_neuron_idx -> array of spike times (ms)
+    
+    Returns:
+        syn_mismatch: array of mean mismatch per synapse (NaN if no spikes)
+        syn_spike_count: array of total spike count per synapse
+    """
+    n_syn = len(connections_xa1.i)
+    syn_mismatch = np.full(n_syn, np.nan, dtype=float)
+    syn_spike_count = np.zeros(n_syn, dtype=int)
+    
+    # Convert to arrays once
+    pre_indices = np.array(connections_xa1.i, dtype=int)
+    post_indices = np.array(connections_xa1.j, dtype=int)
+    
+    # Group synapses by (pre, post) pair to process together
+    synapse_groups = {}
+    for s_idx in range(n_syn):
+        key = (pre_indices[s_idx], post_indices[s_idx])
+        synapse_groups.setdefault(key, []).append(s_idx)
+    
+    # Process each unique (pre, post) pair once
+    for (pre_idx, post_idx), syn_indices in synapse_groups.items():
+        pre_times = np.asarray(pre_spikes.get(pre_idx, []), dtype=float)
+        post_times = np.asarray(post_spikes.get(post_idx, []), dtype=float)
+        
+        spike_count = len(pre_times) + len(post_times)
+        
+        if pre_times.size == 0 or post_times.size == 0:
+            # All synapses in this group have no valid mismatch
+            for s_idx in syn_indices:
+                syn_spike_count[s_idx] = spike_count
+            continue
+        
+        # Vectorized nearest neighbor search
+        if post_times.size < 20 or pre_times.size < 20:
+            # For small arrays, simple approach is faster
+            deltas = []
+            for t_post in post_times:
+                idx_min = np.argmin(np.abs(pre_times - t_post))
+                deltas.append(t_post - pre_times[idx_min])
+            mismatch = np.mean(deltas)
+        else:
+            # For larger arrays, use vectorized operations
+            # For each post spike, find nearest pre spike
+            # Broadcasting: shape (n_post, n_pre)
+            diffs = post_times[:, np.newaxis] - pre_times[np.newaxis, :]
+            nearest_pre_indices = np.argmin(np.abs(diffs), axis=1)
+            deltas = post_times - pre_times[nearest_pre_indices]
+            mismatch = np.mean(deltas)
+        
+        # Assign to all synapses in this group
+        for s_idx in syn_indices:
+            syn_mismatch[s_idx] = mismatch
+            syn_spike_count[s_idx] = spike_count
+    
+    return syn_mismatch, syn_spike_count
+
 def attribute_timing_to_upstream_synapse(spike_monitor_post,
                                         spike_times_pre,
                                         connections_xa1,
@@ -211,7 +411,8 @@ def attribute_timing_to_upstream_synapse(spike_monitor_post,
             # filter pre spikes
             for k in pre_spikes:
                 pre_spikes[k] = [t for t in pre_spikes[k] if t >= cutoff_time]
-    
+        
+    '''
     # Compute per-synapse mismatch: mean(post - nearest_pre) over available spike pairs
     n_syn = len(connections_xa1.i)
     syn_mismatch = np.full(n_syn, np.nan, dtype=float)
@@ -235,7 +436,12 @@ def attribute_timing_to_upstream_synapse(spike_monitor_post,
             deltas.append(delta)
         if len(deltas) > 0:
             syn_mismatch[s_idx] = np.mean(deltas)
-
+    '''
+    
+    syn_mismatch, syn_spike_count = compute_synapse_mismatch_optimized(
+        connections_xa1, pre_spikes, post_spikes
+    )
+    
     # Heuristic 2: Filter to top K most active synapses
     active_syn_indices = np.where(~np.isnan(syn_mismatch))[0]
     if max_active_synapses is not None and len(active_syn_indices) > max_active_synapses:
@@ -290,79 +496,12 @@ def attribute_timing_to_upstream_synapse(spike_monitor_post,
     
     print('Candidate synapse pairs to evaluate:', len(candidate_pairs))
 
-    # Find pairs of synapses with similar mismatches
-    applied_updates = []
-    
-    # Build upstream map
-    upstream_i = np.array(connections_upstream.i, dtype=int)
-    upstream_j = np.array(connections_upstream.j, dtype=int)
-    upstream_map = {}
-    for u_idx, target in zip(upstream_i, upstream_j):
-        upstream_map.setdefault(int(u_idx), set()).add(int(target))
-
-    # Process candidate pairs
-    for s1, s2 in candidate_pairs:
-        m1 = syn_mismatch[s1]
-        m2 = syn_mismatch[s2]
-        if np.isnan(m1) or np.isnan(m2):
-            continue
-        if abs(m1 - m2) > timing_threshold:
-            continue
-        
-        # candidate pair
-        pre1 = int(connections_xa1.i[s1])
-        pre2 = int(connections_xa1.i[s2])
-        
-        # find upstream neurons u that project to BOTH pre1 and pre2
-        candidates = [u for u, tgtset in upstream_map.items() if (pre1 in tgtset and pre2 in tgtset)]
-        if len(candidates) == 0:
-            continue
-        
-        # For each candidate upstream neuron, find the most plastic synapse
-        best_syn_idx = None
-        best_eta = -np.inf
-        
-        for u in candidates:
-            syn_idx_u_pre1 = np.where((upstream_i == u) & (upstream_j == pre1))[0]
-            syn_idx_u_pre2 = np.where((upstream_i == u) & (upstream_j == pre2))[0]
-            syn_indices_u = np.concatenate((syn_idx_u_pre1, syn_idx_u_pre2)) if (syn_idx_u_pre1.size + syn_idx_u_pre2.size) > 0 else np.array([], dtype=int)
-            
-            if syn_indices_u.size == 0:
-                continue
-            
-            if hasattr(connections_upstream, 'eta_p'):
-                eta_vals = np.array(connections_upstream.eta_p[syn_indices_u], dtype=float)
-            elif hasattr(connections_upstream, 'eta'):
-                eta_vals = np.array(connections_upstream.eta[syn_indices_u], dtype=float)
-            else:
-                eta_vals = np.zeros(len(syn_indices_u))
-            
-            local_max_idx = np.argmax(eta_vals)
-            local_eta = float(eta_vals[local_max_idx])
-            chosen_syn = int(syn_indices_u[local_max_idx])
-            
-            if local_eta > best_eta:
-                best_eta = local_eta
-                best_syn_idx = chosen_syn
-
-        
-        if best_syn_idx is None:
-            continue
-        
-        # Compute update
-        avg_mismatch = 0.5 * (m1 + m2)
-        stdp_dw = stdp_delta(avg_mismatch)
-        delta_w = float(epsilon_timing) * float(stdp_dw)
-        
-        # Apply and record
-        try:
-            w_arr = np.array(connections_upstream.w, dtype=float)
-            w_arr[best_syn_idx] += delta_w
-            connections_upstream.w = w_arr
-        except Exception:
-            pass
-        
-        applied_updates.append((int(best_syn_idx), float(delta_w)))
+    upstream_structures = build_upstream_structures(connections_upstream)
+    applied_updates = process_pairs_optimized(
+        candidate_pairs, syn_mismatch, connections_xa1, 
+        connections_upstream, timing_threshold, epsilon_timing,
+        A_plus, A_minus, tau_plus, tau_minus
+    )
 
     return applied_updates
 
