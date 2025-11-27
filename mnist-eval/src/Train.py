@@ -34,6 +34,7 @@ print ('---------------------------------------------')
 
 #the amount of input
 n_input = 784
+n_layer_2 = 400
 
 #connection parameters
 kernel_type_num = 3
@@ -114,9 +115,15 @@ plasticity_csv = os.path.join(log_dir, 'plasticity_log.csv')
 # write header
 with open(plasticity_csv, 'w', newline='') as f:
     w = csv.writer(f)
-    w.writerow(['iter','time','mean_eta_p','std_eta_p','p50_eta_p','p90_eta_p',
-                'mean_eta_q','std_eta_q','p50_eta_q','p90_eta_q',
-                'mean_theta_mv','std_theta_mv','weight_change_norm', 'weight_change_avg', 'weight_change_max', 'accuracy'])
+    w.writerow(['iter','time',
+                'mean_eta_p_x1a2','std_eta_p_x1a2','p50_eta_p_x1a2','p90_eta_p_x1a2',
+                'mean_eta_q_x1a2','std_eta_q_x1a2','p50_eta_q_x1a2','p90_eta_q_x1a2',
+                'mean_eta_p_a2a1','std_eta_p_a2a1','p50_eta_p_a2a1','p90_eta_p_a2a1',
+                'mean_eta_q_a2a1','std_eta_q_a2a1','p50_eta_q_a2a1','p90_eta_q_a2a1',
+                'mean_theta_mv','std_theta_mv',
+                'weight_change_norm_x1a2', 'weight_change_avg_x1a2', 'weight_change_max_x1a2',
+                'weight_change_norm_a2a1', 'weight_change_avg_a2a1', 'weight_change_max_a2a1',
+                'accuracy'])
 timing_updates_csv = os.path.join(log_dir, 'timing_updates_log.csv')
 # write header for timing updates
 with open(timing_updates_csv, 'w', newline='') as f:
@@ -185,6 +192,9 @@ net = {}
     
 #create neuron group
 neuron_groups['X1'] = b.PoissonGroup(n_input, 0*b.hertz)
+neuron_groups['A2'] = b.NeuronGroup(n_layer_2, neuron_eqs_e, method='euler', threshold=thresh_e, refractory=refrac_e, reset= scr_e)
+neuron_groups['A2'].v = v_rest_e - 40. * b.mV
+neuron_groups['A2'].theta = np.ones((n_layer_2)) * 20.0*b.mV
 neuron_groups['A1'] = b.NeuronGroup(neuron_num, neuron_eqs_e, method='euler', threshold=thresh_e, refractory=refrac_e, reset= scr_e)
 neuron_groups['A1'].v = v_rest_e - 40. * b.mV
 neuron_groups['A1'].theta = np.ones((neuron_num)) * 20.0*b.mV
@@ -215,87 +225,91 @@ connections['A1A1'].w = weightMatrix
 end = time.time()
 print ('time needed to create connection A1A1:', end - start)
 
-#create connections XA
+#create connections X1A2
 start = time.time()
-weightMatrix = np.zeros((n_input, neuron_num))
 if Learning:
-    mark = 0
-    for kernel in range(kernel_num):
-        feature_map_size = feature_map_size_each_kernel[kernel]
-        kernel_size = kernel_size_each_kernel[kernel]
-        stride = stride_each_kernel[kernel]
-        for src in range(n_input):
-            src_z = int(src / n_input)
-            src_y = int((src - src_z*n_input) / sqrt(n_input))
-            src_x = int(src - src_z*n_input - src_y*sqrt(n_input))
-            for tar in range(mark, mark+neuron_num_each_kernel[kernel]):
-                T = tar - mark
-                tar_z = int(T / feature_map_size)
-                tar_y = int((T - tar_z*feature_map_size) / sqrt(feature_map_size))
-                tar_x = int(T - tar_z*feature_map_size - tar_y*sqrt(feature_map_size))
-                if src_x >= tar_x*stride and src_x < tar_x*stride+kernel_size and src_y >= tar_y*stride and src_y < tar_y*stride+kernel_size:
-                    weightMatrix[src,tar] = 0.3*rand()+wmin_ee
-        mark += neuron_num_each_kernel[kernel]
-weightMatrix = weightMatrix.reshape((n_input*neuron_num))
-
-if Learning:
-    connections['X1A1'] = b.Synapses(neuron_groups['X1'], neuron_groups['A1'], eqs_stdp_ee, on_pre=eqs_stdp_pre_ee, on_post=eqs_stdp_post_ee)
+    connections['X1A2'] = b.Synapses(neuron_groups['X1'], neuron_groups['A2'], eqs_stdp_ee, on_pre=eqs_stdp_pre_ee, on_post=eqs_stdp_post_ee)
 else:
-    connections['X1A1'] = b.Synapses(neuron_groups['X1'], neuron_groups['A1'], 'w : 1', on_pre='ge+=w')
-connections['X1A1'].connect()
-connections['X1A1'].w = weightMatrix
-connections['X1A1'].delay = 'rand()*'+ str(Delay/b.ms) +'*ms'
-
-# Initialize eta values for synapses
+    connections['X1A2'] = b.Synapses(neuron_groups['X1'], neuron_groups['A2'], 'w : 1', on_pre='ge+=w')
+connections['X1A2'].connect()
+connections['X1A2'].w = '0.3*rand()+wmin_ee'
+connections['X1A2'].delay = 'rand()*'+ str(Delay/b.ms) +'*ms'
 if Learning:
-    connections['X1A1'].eta_p = nu_ee_pre_init
-    connections['X1A1'].eta_q = nu_ee_post_init
+    connections['X1A2'].eta_p = nu_ee_pre_init
+    connections['X1A2'].eta_q = nu_ee_post_init
+print ('time needed to create connection X1A2:', time.time() - start)
+
+#create connections A2A1
+start = time.time()
+if Learning:
+    connections['A2A1'] = b.Synapses(neuron_groups['A2'], neuron_groups['A1'], eqs_stdp_ee, on_pre=eqs_stdp_pre_ee, on_post=eqs_stdp_post_ee)
+else:
+    connections['A2A1'] = b.Synapses(neuron_groups['A2'], neuron_groups['A1'], 'w : 1', on_pre='ge+=w')
+connections['A2A1'].connect()
+connections['A2A1'].w = '0.3*rand()+wmin_ee'
+connections['A2A1'].delay = 'rand()*'+ str(Delay/b.ms) +'*ms'
+if Learning:
+    connections['A2A1'].eta_p = nu_ee_pre_init
+    connections['A2A1'].eta_q = nu_ee_post_init
+print ('time needed to create connection A2A1:', time.time() - start)
 
 # --- monitoring helpers ---------------------------------------------------
-# sample indices if you want per-synapse time series (optional, keep small)
-num_syn = len(connections['X1A1'].w)
-sample_syn_idx = np.random.choice(num_syn, size=min(1000, num_syn), replace=False)
-
 # prev_weights for convergence metric
-prev_weights = np.array(connections['X1A1'].w).astype(float)
+prev_weights_x1a2 = np.array(connections['X1A2'].w).astype(float)
+prev_weights_a2a1 = np.array(connections['A2A1'].w).astype(float)
 
 def log_plasticity(iteration, accuracy_val=None):
-    eta_p = np.array(connections['X1A1'].eta_p, dtype=float)
-    eta_q = np.array(connections['X1A1'].eta_q, dtype=float)
-    theta_vals = np.array(neuron_groups['A1'].theta / b.mV, dtype=float)  # in mV for readability
-    # stats
     def stats(a):
         return np.mean(a), np.std(a), np.percentile(a,50), np.percentile(a,90)
-    mean_p, std_p, p50_p, p90_p = stats(eta_p)
-    mean_q, std_q, p50_q, p90_q = stats(eta_q)
+
+    eta_p_x1a2 = np.array(connections['X1A2'].eta_p, dtype=float)
+    eta_q_x1a2 = np.array(connections['X1A2'].eta_q, dtype=float)
+    mean_p_x1a2, std_p_x1a2, p50_p_x1a2, p90_p_x1a2 = stats(eta_p_x1a2)
+    mean_q_x1a2, std_q_x1a2, p50_q_x1a2, p90_q_x1a2 = stats(eta_q_x1a2)
+
+    eta_p_a2a1 = np.array(connections['A2A1'].eta_p, dtype=float)
+    eta_q_a2a1 = np.array(connections['A2A1'].eta_q, dtype=float)
+    mean_p_a2a1, std_p_a2a1, p50_p_a2a1, p90_p_a2a1 = stats(eta_p_a2a1)
+    mean_q_a2a1, std_q_a2a1, p50_q_a2a1, p90_q_a2a1 = stats(eta_q_a2a1)
+
+    theta_vals = np.array(neuron_groups['A1'].theta / b.mV, dtype=float)
     mean_theta, std_theta = np.mean(theta_vals), np.std(theta_vals)
-    # weight change norm
-    cur_w = np.array(connections['X1A1'].w, dtype=float)
-    w_change = np.linalg.norm(cur_w - prev_weights)
-    w_change_avg = np.mean(np.abs(cur_w - prev_weights))
-    w_change_max = np.max(np.abs(cur_w - prev_weights))
-    # append row
+
+    cur_w_x1a2 = np.array(connections['X1A2'].w, dtype=float)
+    w_change_x1a2 = np.linalg.norm(cur_w_x1a2 - prev_weights_x1a2)
+    w_change_avg_x1a2 = np.mean(np.abs(cur_w_x1a2 - prev_weights_x1a2))
+    w_change_max_x1a2 = np.max(np.abs(cur_w_x1a2 - prev_weights_x1a2))
+
+    cur_w_a2a1 = np.array(connections['A2A1'].w, dtype=float)
+    w_change_a2a1 = np.linalg.norm(cur_w_a2a1 - prev_weights_a2a1)
+    w_change_avg_a2a1 = np.mean(np.abs(cur_w_a2a1 - prev_weights_a2a1))
+    w_change_max_a2a1 = np.max(np.abs(cur_w_a2a1 - prev_weights_a2a1))
+
     with open(plasticity_csv, 'a', newline='') as f:
         wcsv = csv.writer(f)
-        wcsv.writerow([iteration, time.time(), mean_p, std_p, p50_p, p90_p,
-                       mean_q, std_q, p50_q, p90_q,
-                       mean_theta, std_theta, w_change, w_change_avg, w_change_max, '' if accuracy_val is None else accuracy_val])
-    # update prev_weights in outer scope
-    nonlocal_prev_weights_assign(cur_w)
+        wcsv.writerow([iteration, time.time(),
+                       mean_p_x1a2, std_p_x1a2, p50_p_x1a2, p90_p_x1a2,
+                       mean_q_x1a2, std_q_x1a2, p50_q_x1a2, p90_q_x1a2,
+                       mean_p_a2a1, std_p_a2a1, p50_p_a2a1, p90_p_a2a1,
+                       mean_q_a2a1, std_q_a2a1, p50_q_a2a1, p90_q_a2a1,
+                       mean_theta, std_theta,
+                       w_change_x1a2, w_change_avg_x1a2, w_change_max_x1a2,
+                       w_change_a2a1, w_change_avg_a2a1, w_change_max_a2a1,
+                       '' if accuracy_val is None else accuracy_val])
+    
+    nonlocal_prev_weights_assign(cur_w_x1a2, cur_w_a2a1)
 
-# small helper to mutate outer prev_weights
-def nonlocal_prev_weights_assign(arr):
-    global prev_weights
-    prev_weights = arr.copy()
-
-end = time.time()
-print ('time needed to create connection X1A1:', end - start)
+def nonlocal_prev_weights_assign(arr_x1a2, arr_a2a1):
+    global prev_weights_x1a2, prev_weights_a2a1
+    prev_weights_x1a2 = arr_x1a2.copy()
+    prev_weights_a2a1 = arr_a2a1.copy()
 
 #create monitors
-spike_counters['A1'] = b.SpikeMonitor(neuron_groups['A1'], record=False)
+spike_counters['A1'] = b.SpikeMonitor(neuron_groups['A1'], record=True)
+spike_counters['A2'] = b.SpikeMonitor(neuron_groups['A2'], record=True)
 
 #create networks
-net['M1'] = Network(neuron_groups['A1'],neuron_groups['X1'],connections['X1A1'],connections['A1A1'],spike_counters['A1'])
+net['M1'] = Network(neuron_groups['A1'], neuron_groups['A2'], neuron_groups['X1'], connections['X1A2'], connections['A2A1'], connections['A1A1'], spike_counters['A1'], spike_counters['A2'])
 #-----------------------------------------------------------------------------------------------------------------------
 
 # load MNIST
@@ -323,8 +337,10 @@ train_begin = 0    #specify which iteration you want the training to begin from
 
 #load trained weight to continue
 if train_begin:
-    connections['X1A1'].w = np.load(load_path + 'X1A1' + '_' + str(train_begin) + '.npy')
+    connections['X1A2'].w = np.load(load_path + 'X1A2' + '_' + str(train_begin) + '.npy')
+    connections['A2A1'].w = np.load(load_path + 'A2A1' + '_' + str(train_begin) + '.npy')
     neuron_groups['A1'].theta = np.load(load_path + 'theta_A1' + '_' + str(train_begin) + '.npy') *b.volt
+    neuron_groups['A2'].theta = np.load(load_path + 'theta_A2' + '_' + str(train_begin) + '.npy') *b.volt
 
 #the intensity of rate coding
 intensity_step = 0.125
@@ -360,16 +376,15 @@ while j < n_train:
     Rates = training['x'][j%60000,:,:].reshape((n_input)) * input_intensity
 
     neuron_groups['X1'].rates = Rates*b.hertz
-    connections['X1A1'] = normalize_weights(connections['X1A1'],norm)
+    connections['X1A2'] = normalize_weights(connections['X1A2'],norm)
+    connections['A2A1'] = normalize_weights(connections['A2A1'],norm)
 
     net['M1'].run(single_example_time)
     
     current_spike_count['A1'] = np.asarray(spike_counters['A1'].count[:])- previous_spike_count['A1']
     previous_spike_count['A1'] = np.copy(spike_counters['A1'].count[:])
     
-    #if current_spike_count is not enough, increase the input_intensity and simulat this example again
     spike_num = np.sum(current_spike_count['A1'])
-    #print spike_num
 
     if spike_num < retrain_gate:
         input_intensity += intensity_step
@@ -379,14 +394,12 @@ while j < n_train:
         result_monitor['A1'][j%validate_interval,:] = current_spike_count['A1']
         input_numbers[j%validate_interval] = training['y'][j%60000][0]
 
-        # Apply timing-based attribution to upstream synapses
-        # Note: attribute_timing_to_upstream_synapse returns a list of (syn_index, delta_w)
-        # and expects timing_threshold in milliseconds (float), so pass timing_threshold/b.ms
+        # Apply timing-based attribution to upstream synapses for A2A1
         applied_updates = attribute_timing_to_upstream_synapse(
             spike_counters['A1'],
-            None,
-            connections['X1A1'],
-            connections['X1A1'],  # fallback: use X1A1 as upstream object if no separate upstream layer
+            spike_counters['A2'],
+            connections['A2A1'],
+            connections['X1A2'],
             float(timing_threshold / b.ms),
             epsilon_timing,
             use_fast_mode=fast_timing_updates,
@@ -395,9 +408,8 @@ while j < n_train:
             subsample_rate=subsample_rate
         )
         
-        # apply returned updates (list of tuples) to connections['X1A1'].w safely
         try:
-            w_arr = np.array(connections['X1A1'].w, dtype=float)
+            w_arr = np.array(connections['X1A2'].w, dtype=float)
             n_updates = 0
             sum_abs_dw = 0.0
             max_abs_dw = 0.0
@@ -412,17 +424,13 @@ while j < n_train:
                         if abs(dwf) > max_abs_dw:
                             max_abs_dw = abs(dwf)
                     except Exception:
-                        # skip malformed entries
                         continue
-            # write weights back
-            connections['X1A1'].w = w_arr
+            connections['X1A2'].w = w_arr
         except Exception:
-            # If direct assignment fails, just skip applying updates but still log
             n_updates = 0
             sum_abs_dw = 0.0
             max_abs_dw = 0.0
         
-        # log timing-updates summary for this iteration
         with open(timing_updates_csv, 'a', newline='') as f:
             wcsv = csv.writer(f)
             wcsv.writerow([j, time.time(), n_updates, sum_abs_dw, max_abs_dw])
@@ -449,11 +457,11 @@ while j < n_train:
             accuracy['A1'].append(acc)
             print ('Validate accuracy: ', acc, '(last)', np.max(accuracy['A1']), '(best)')
 
-            # log plasticity with accuracy
             log_plasticity(j, accuracy_val=acc)
             
         if j % save_interval == 0:
-            np.save(save_path + 'X1A1' + '_' + str(j), connections['X1A1'].w)
+            np.save(save_path + 'X1A2' + '_' + str(j), connections['X1A2'].w)
+            np.save(save_path + 'A2A1' + '_' + str(j), connections['A2A1'].w)
             np.save(save_path + 'theta_A1' + '_' + str(j), neuron_groups['A1'].theta)
-            # also log plasticity without validation-accuracy
+            np.save(save_path + 'theta_A2' + '_' + str(j), neuron_groups['A2'].theta)
             log_plasticity(j, accuracy_val=None)

@@ -21,6 +21,7 @@ print ('---------------------------------------------')
 
 #the amount of input
 n_input = 784
+n_layer_2 = 400
 
 #connection parameters
 kernel_type_num = 3
@@ -114,6 +115,9 @@ net = {}
 
 #create neuron group
 neuron_groups['X1'] = b.PoissonGroup(n_input, 0*b.hertz)
+neuron_groups['A2'] = b.NeuronGroup(n_layer_2, neuron_eqs_e, method='euler', threshold=thresh_e, refractory=refrac_e, reset= scr_e)
+neuron_groups['A2'].v = v_rest_e - 40. * b.mV
+neuron_groups['A2'].theta = np.ones((n_layer_2)) * 20.0*b.mV
 neuron_groups['A1'] = b.NeuronGroup(neuron_num, neuron_eqs_e, method='euler', threshold=thresh_e, refractory=refrac_e, reset= scr_e)
 neuron_groups['A1'].v = v_rest_e - 40. * b.mV
 neuron_groups['A1'].theta = np.ones((neuron_num)) * 20.0*b.mV
@@ -144,44 +148,28 @@ connections['A1A1'].w = weightMatrix
 end = time.time()
 print ('time needed to create connection A1A1:', end - start)
 
-#create connections XA
+#create connections X1A2
 start = time.time()
-weightMatrix = np.zeros((n_input, neuron_num))
-if Learning:
-    mark = 0
-    for kernel in range(kernel_num):
-        feature_map_size = feature_map_size_each_kernel[kernel]
-        kernel_size = kernel_size_each_kernel[kernel]
-        stride = stride_each_kernel[kernel]
-        for src in range(n_input):
-            src_z = int(src / n_input)
-            src_y = int((src - src_z*n_input) / sqrt(n_input))
-            src_x = int(src - src_z*n_input - src_y*sqrt(n_input))
-            for tar in range(mark, mark+neuron_num_each_kernel[kernel]):
-                T = tar - mark
-                tar_z = int(T / feature_map_size)
-                tar_y = int((T - tar_z*feature_map_size) / sqrt(feature_map_size))
-                tar_x = int(T - tar_z*feature_map_size - tar_y*sqrt(feature_map_size))
-                if src_x >= tar_x*stride and src_x < tar_x*stride+kernel_size and src_y >= tar_y*stride and src_y < tar_y*stride+kernel_size:
-                    weightMatrix[src,tar] = 0.3*rand()+wmin_ee
-        mark += neuron_num_each_kernel[kernel]
-weightMatrix = weightMatrix.reshape((n_input*neuron_num))
-
-if Learning:
-    connections['X1A1'] = b.Synapses(neuron_groups['X1'], neuron_groups['A1'], eqs_stdp_ee, on_pre=eqs_stdp_pre_ee, on_post=eqs_stdp_post_ee)
-else:
-    connections['X1A1'] = b.Synapses(neuron_groups['X1'], neuron_groups['A1'], 'w : 1', on_pre='ge+=w')
-connections['X1A1'].connect()
-connections['X1A1'].w = weightMatrix
-connections['X1A1'].delay = 'rand()*'+ str(Delay/b.ms) +'*ms'
+connections['X1A2'] = b.Synapses(neuron_groups['X1'], neuron_groups['A2'], 'w : 1', on_pre='ge+=w')
+connections['X1A2'].connect()
+connections['X1A2'].delay = 'rand()*'+ str(Delay/b.ms) +'*ms'
 end = time.time()
-print ('time needed to create connection X1A1:', end - start)
+print ('time needed to create connection X1A2:', end - start)
+
+#create connections A2A1
+start = time.time()
+connections['A2A1'] = b.Synapses(neuron_groups['A2'], neuron_groups['A1'], 'w : 1', on_pre='ge+=w')
+connections['A2A1'].connect()
+connections['A2A1'].delay = 'rand()*'+ str(Delay/b.ms) +'*ms'
+end = time.time()
+print ('time needed to create connection A2A1:', end - start)
 
 #create monitors
 spike_counters['A1'] = b.SpikeMonitor(neuron_groups['A1'], record=False)
+spike_counters['A2'] = b.SpikeMonitor(neuron_groups['A2'], record=False)
 
 #create networks
-net['M1'] = Network(neuron_groups['A1'],neuron_groups['X1'],connections['X1A1'],connections['A1A1'],spike_counters['A1'])
+net['M1'] = Network(neuron_groups['A1'], neuron_groups['A2'], neuron_groups['X1'], connections['X1A2'], connections['A2A1'], connections['A1A1'], spike_counters['A1'], spike_counters['A2'])
 #-----------------------------------------------------------------------------------------------------------------------
 
 # load MNIST
@@ -215,8 +203,10 @@ except Exception as e:
     raise
 
 #load trained weight and theta
-connections['X1A1'].w = np.load(load_path + 'X1A1' + '_'+ load_ending + '.npy')
+connections['X1A2'].w = np.load(load_path + 'X1A2' + '_'+ load_ending + '.npy')
+connections['A2A1'].w = np.load(load_path + 'A2A1' + '_'+ load_ending + '.npy')
 neuron_groups['A1'].theta = np.load(load_path + 'theta_A1' + '_' + load_ending + '.npy') *b.volt
+neuron_groups['A2'].theta = np.load(load_path + 'theta_A2' + '_' + load_ending + '.npy') *b.volt
 
 #the time-window of simulation
 single_example_time =   0.35 * b.second
@@ -333,10 +323,3 @@ while j < n_test:
 
 np.save(save_path + 'Activity_testing_A1' +'_'+ str(n_test) + save_ending, result_monitor_testing['A1'])
 np.save(save_path + 'Labels_testing' + str(n_test) + save_ending, input_numbers_testing)
-
-
-
-
-
-
-
