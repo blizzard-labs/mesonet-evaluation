@@ -1,70 +1,66 @@
 import numpy as np
-from Functions import *
+import os.path
+from Functions import get_new_assignments, get_recognized_number_proportion
 
-path_root = './activity/'
-trained_sample = ''   #specify which activity file you want to load from path_root
-testing_num = 100
-assignment_num = 100
-power = 0.1    #VFA parameter
+# specify the location
+load_path = './activity/'
+load_ending = '990'       #specify which weight file you want to load from load_path (only ending number needed)
+n_assignment = 100
+n_test = 100
 
-#------------------------------------------------------------------------------ 
-# Load neurons activity
-testing_result_monitor = np.load(path_root + 'Activity_testing_A1_' + str(testing_num) + '1000'+ trained_sample + '.npy')
-assignment_result_monitor = np.load(path_root + 'Activity_assignment_A1_' + str(assignment_num) + '1000'+ trained_sample + '.npy')
+print('Loading data from:', load_path)
+print('Using weights from run:', load_ending)
+print('Number of assignment samples:', n_assignment)
+print('Number of test samples:', n_test)
 
-testing_input_numbers = np.load(path_root + 'Labels_testing' + str(testing_num) + '1000'+ trained_sample + '.npy')
-assignment_input_numbers = np.load(path_root + 'Labels_assignment' + str(assignment_num) + '1000' + trained_sample + '.npy')
+# Load assignment data
+try:
+    activity_assignment = np.load(load_path + 'Activity_assignment_A1' +'_'+ str(n_assignment) + load_ending + '.npy')
+    labels_assignment = np.load(load_path + 'Labels_assignment' + str(n_assignment) + load_ending + '.npy')
+    print('Assignment data loaded successfully.')
+except IOError as e:
+    print('Error loading assignment data:', e)
+    print('Please run Test.py first to generate the activity files.')
+    exit()
+
+# Load testing data
+try:
+    activity_testing = np.load(load_path + 'Activity_testing_A1' +'_'+ str(n_test) + load_ending + '.npy')
+    labels_testing = np.load(load_path + 'Labels_testing' + str(n_test) + load_ending + '.npy')
+    print('Testing data loaded successfully.')
+except IOError as e:
+    print('Error loading testing data:', e)
+    print('Please run Test.py first to generate the activity files.')
+    exit()
+
+
+# Get assignments for the output neurons
+print('Assigning labels to output neurons...')
+assignments = get_new_assignments(activity_assignment, labels_assignment)
+print('Assignments complete.')
+
+# Evaluate the performance on the test set
+print('Evaluating performance on the test set...')
+correct_predictions = 0
+total_predictions = n_test
+
+for i in range(total_predictions):
+    # Get the spike rates for the current test image
+    spike_rates = activity_testing[i,:]
     
-#------------------------------------------------------------------------------ 
-# Assignments
-print ('get assignments(VFO) for A1')
-assignments = get_new_assignments(assignment_result_monitor, assignment_input_numbers)
-print ('get assignments(VFA) for A1')
-assignments_for_10 = get_new_assignments_for_10(assignment_result_monitor, assignment_input_numbers, power)
+    # Get the recognized number proportion
+    proportions = get_recognized_number_proportion(assignments, spike_rates)
+    
+    # Predict the digit
+    prediction = np.argmax(proportions)
+    
+    # Check if the prediction is correct
+    if prediction == labels_testing[i]:
+        correct_predictions += 1
 
-#------------------------------------------------------------------------------ 
-# Accuracy
-
-results_proportion = np.zeros((10, assignment_num))
-test_results = np.zeros((10, assignment_num))
-for j in range(assignment_num):
-    results_proportion[:,j] = get_recognized_number_proportion(assignments, assignment_result_monitor[j,:])
-    test_results[:,j] = np.argsort(results_proportion[:,j])[::-1]
-difference = test_results[0,:] - assignment_input_numbers[:]
-correct = len(np.where(difference == 0)[0])
-incorrect = len(np.where(difference != 0)[0])
-sum_accurracy = correct/float(assignment_num) * 100
-print ('VFO Accuracy(validating): ', sum_accurracy, ' num incorrect: ', incorrect)
-    
-results_proportion = np.zeros((10, testing_num))
-test_results = np.zeros((10, testing_num))
-for j in range(testing_num):
-    results_proportion[:,j] = get_recognized_number_proportion(assignments, testing_result_monitor[j,:])
-    test_results[:,j] = np.argsort(results_proportion[:,j])[::-1]
-difference = test_results[0,:] - testing_input_numbers[:]
-correct = len(np.where(difference == 0)[0])
-incorrect = len(np.where(difference != 0)[0])
-sum_accurracy = correct/float(testing_num) * 100
-print ('VFO Accuracy(testing): ', sum_accurracy, ' num incorrect: ', incorrect)
-    
-results_proportion = np.zeros((10, assignment_num))
-test_results = np.zeros((10, assignment_num))
-for j in range(assignment_num):
-    results_proportion[:,j] = get_recognized_number_proportion_for_10(assignments_for_10, assignment_result_monitor[j,:])
-    test_results[:,j] = np.argsort(results_proportion[:,j])[::-1]
-difference = test_results[0,:] - assignment_input_numbers[:]
-correct = len(np.where(difference == 0)[0])
-incorrect = len(np.where(difference != 0)[0])
-sum_accurracy = correct/float(assignment_num) * 100
-print ('VFA (power:', power, ') Accuracy(validating): ', sum_accurracy, ' num incorrect: ', incorrect)
-    
-results_proportion = np.zeros((10, testing_num))
-test_results = np.zeros((10, testing_num))
-for j in range(testing_num):
-    results_proportion[:,j] = get_recognized_number_proportion_for_10(assignments_for_10, testing_result_monitor[j,:])
-    test_results[:,j] = np.argsort(results_proportion[:,j])[::-1]
-difference = test_results[0,:] - testing_input_numbers[:]
-correct = len(np.where(difference == 0)[0])
-incorrect = len(np.where(difference != 0)[0])
-sum_accurracy = correct/float(testing_num) * 100
-print ('VFA (power:', power, ') Accuracy(testing): ', sum_accurracy, ' num incorrect: ', incorrect)
+# Calculate accuracy
+accuracy = (correct_predictions / float(total_predictions)) * 100 if total_predictions > 0 else 0
+print('---------------------------------------------')
+print('Evaluation finished.')
+print('Accuracy: %.2f%%' % accuracy)
+print('---------------------------------------------')

@@ -12,7 +12,7 @@ from Functions import *
 
 #set parameters
 np.random.seed(0)
-prefs.codegen.target = 'auto'
+prefs.codegen.target = 'numpy'
 prefs.codegen.cpp.extra_compile_args_gcc = ['-march=native']
 
 parser = argparse.ArgumentParser()
@@ -372,7 +372,8 @@ start = time.time()
 j = train_begin
 input_intensity = start_intensity
 while j < n_train:
-
+    print('Training iteration:', j+1, '/', n_train)
+    
     Rates = training['x'][j%60000,:,:].reshape((n_input)) * input_intensity
 
     neuron_groups['X1'].rates = Rates*b.hertz
@@ -395,6 +396,7 @@ while j < n_train:
         input_numbers[j%validate_interval] = training['y'][j%60000][0]
 
         # Apply timing-based attribution to upstream synapses for A2A1
+        print('Applying timing-based updates to upstream synapses...')
         applied_updates = attribute_timing_to_upstream_synapse(
             spike_counters['A1'],
             spike_counters['A2'],
@@ -407,7 +409,7 @@ while j < n_train:
             time_window_ms=time_window_ms,
             subsample_rate=subsample_rate
         )
-        
+        print('alisdjflkasdjf')
         try:
             w_arr = np.array(connections['X1A2'].w, dtype=float)
             n_updates = 0
@@ -435,6 +437,8 @@ while j < n_train:
             wcsv = csv.writer(f)
             wcsv.writerow([j, time.time(), n_updates, sum_abs_dw, max_abs_dw])
 
+        print('Applied')
+        
         neuron_groups['X1'].rates = 0*b.hertz
         net['M1'].run(resting_time)
         input_intensity = start_intensity

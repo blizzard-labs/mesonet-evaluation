@@ -130,7 +130,7 @@ def attribute_timing_to_upstream_synapse(spike_monitor_post,
                                         use_fast_mode=False,
                                         max_active_synapses=None,
                                         time_window_ms=None,
-                                        mismatch_bin_width_ms=2.0,
+                                        mismatch_bin_width_ms=5.0,
                                         subsample_rate=1.0):
     """
     Find pairs of X->A synapses whose pre->post timing mismatches are similar,
@@ -211,7 +211,7 @@ def attribute_timing_to_upstream_synapse(spike_monitor_post,
             # filter pre spikes
             for k in pre_spikes:
                 pre_spikes[k] = [t for t in pre_spikes[k] if t >= cutoff_time]
-
+    
     # Compute per-synapse mismatch: mean(post - nearest_pre) over available spike pairs
     n_syn = len(connections_xa1.i)
     syn_mismatch = np.full(n_syn, np.nan, dtype=float)
@@ -244,39 +244,51 @@ def attribute_timing_to_upstream_synapse(spike_monitor_post,
         top_k_idx = np.argsort(scores)[-max_active_synapses:]
         active_syn_indices = active_syn_indices[top_k_idx]
     
+    print('Active synapses considered for pairing:', active_syn_indices.shape[0])
+    
     # Heuristic 3: Subsample synapses if requested
     if subsample_rate < 1.0:
         n_keep = max(1, int(len(active_syn_indices) * subsample_rate))
         active_syn_indices = np.random.choice(active_syn_indices, size=n_keep, replace=False)
 
-    # Heuristic 4: Bin mismatches for faster pair matching
+    # Heuristic 4: Find candidate pairs using mismatch sliding window
     if use_fast_mode and mismatch_bin_width_ms > 0:
-        # Create bins: mismatch_bin_width_ms step
-        mismatch_vals = syn_mismatch[active_syn_indices]
-        bins = {}
+        threshold = mismatch_bin_width_ms
+
+        # Extract valid synapses with their mismatch values
+        valid = []
         for syn_i in active_syn_indices:
             m = syn_mismatch[syn_i]
             if not np.isnan(m):
-                bin_key = int(np.round(m / mismatch_bin_width_ms))
-                bins.setdefault(bin_key, []).append(syn_i)
-        # Only compare synapses in same bin or adjacent bins
+                valid.append((syn_i, m))
+
+        # Sort by mismatch value
+        valid.sort(key=lambda x: x[1])
         candidate_pairs = []
-        for bin_key in sorted(bins.keys()):
-            # same bin
-            for i in range(len(bins[bin_key])):
-                for j in range(i+1, len(bins[bin_key])):
-                    candidate_pairs.append((bins[bin_key][i], bins[bin_key][j]))
-            # adjacent bin
-            if bin_key + 1 in bins:
-                for s1 in bins[bin_key]:
-                    for s2 in bins[bin_key+1]:
-                        candidate_pairs.append((s1, s2))
+        n = len(valid)
+
+        # Sliding window
+        j = 0
+        for i in range(n):
+            # Expand j until mismatch difference exceeds threshold
+            while j < n and (valid[j][1] - valid[i][1]) <= threshold:
+                if j > i:
+                    candidate_pairs.append((valid[i][0], valid[j][0]))
+                j += 1
+
+            # Important: reset j = i+1 only if needed
+            # (This prevents skipping valid windows)
+            if j < i + 1:
+                j = i + 1
+
     else:
-        # Full pairwise (without binning)
+        # Full pairwise (fallback)
         candidate_pairs = []
         for i, s1 in enumerate(active_syn_indices):
             for s2 in active_syn_indices[i+1:]:
                 candidate_pairs.append((s1, s2))
+    
+    print('Candidate synapse pairs to evaluate:', len(candidate_pairs))
 
     # Find pairs of synapses with similar mismatches
     applied_updates = []
@@ -332,6 +344,7 @@ def attribute_timing_to_upstream_synapse(spike_monitor_post,
             if local_eta > best_eta:
                 best_eta = local_eta
                 best_syn_idx = chosen_syn
+
         
         if best_syn_idx is None:
             continue
