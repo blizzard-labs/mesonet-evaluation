@@ -453,10 +453,10 @@ def attribute_timing_to_upstream_synapse(spike_monitor_post,
     print('Active synapses considered for pairing:', active_syn_indices.shape[0])
     
     # Heuristic 3: Subsample synapses if requested
-    if subsample_rate < 1.0:
+    if subsample_rate < 1.0 and active_syn_indices.shape[0] > 0:
         n_keep = max(1, int(len(active_syn_indices) * subsample_rate))
         active_syn_indices = np.random.choice(active_syn_indices, size=n_keep, replace=False)
-
+    
     # Heuristic 4: Find candidate pairs using mismatch sliding window
     if use_fast_mode and mismatch_bin_width_ms > 0:
         threshold = mismatch_bin_width_ms

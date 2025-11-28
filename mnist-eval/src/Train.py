@@ -17,8 +17,8 @@ prefs.codegen.cpp.extra_compile_args_gcc = ['-march=native']
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--alpha', type=float, default=0.00075)
-parser.add_argument('--timing_threshold', type=float, default=7.0)   # ms
-parser.add_argument('--epsilon_timing', type=float, default=0.001)
+parser.add_argument('--timing_threshold', type=float, default=5.0)   # ms
+parser.add_argument('--epsilon_timing', type=float, default=0.07)
 parser.add_argument('--run_name', type=str, default='run1')
 parser.add_argument('--fast_timing_updates', action='store_true', help='Enable fast mode for timing updates')
 parser.add_argument('--max_active_synapses', type=int, default=None, help='Limit to top K active synapses')
@@ -372,7 +372,6 @@ start = time.time()
 j = train_begin
 input_intensity = start_intensity
 while j < n_train:
-    print('Training iteration:', j+1, '/', n_train)
     
     Rates = training['x'][j%60000,:,:].reshape((n_input)) * input_intensity
 
@@ -392,50 +391,54 @@ while j < n_train:
         neuron_groups['X1'].rates = 0*b.hertz
         net['M1'].run(resting_time)
     else:
+        print('Training iteration:', j+1, '/', n_train)
+        
         result_monitor['A1'][j%validate_interval,:] = current_spike_count['A1']
         input_numbers[j%validate_interval] = training['y'][j%60000][0]
-
-        # Apply timing-based attribution to upstream synapses for A2A1
-        print('Applying timing-based updates to upstream synapses...')
-        applied_updates = attribute_timing_to_upstream_synapse(
-            spike_counters['A1'],
-            spike_counters['A2'],
-            connections['A2A1'],
-            connections['X1A2'],
-            float(timing_threshold / b.ms),
-            epsilon_timing,
-            use_fast_mode=fast_timing_updates,
-            max_active_synapses=max_active_synapses,
-            time_window_ms=time_window_ms,
-            subsample_rate=subsample_rate
-        )
-
-        try:
-            w_arr = np.array(connections['X1A2'].w, dtype=float)
-            n_updates = 0
-            sum_abs_dw = 0.0
-            max_abs_dw = 0.0
-            if isinstance(applied_updates, list):
-                for syn_idx, dw in applied_updates:
-                    try:
-                        syn_i = int(syn_idx)
-                        dwf = float(dw)
-                        w_arr[syn_i] = np.clip(w_arr[syn_i] + dwf, wmin_ee, wmax_ee)
-                        n_updates += 1
-                        sum_abs_dw += abs(dwf)
-                        if abs(dwf) > max_abs_dw:
-                            max_abs_dw = abs(dwf)
-                    except Exception:
-                        continue
-            connections['X1A2'].w = w_arr
-        except Exception:
-            n_updates = 0
-            sum_abs_dw = 0.0
-            max_abs_dw = 0.0
+    
+        if j%5 == 0:
         
-        with open(timing_updates_csv, 'a', newline='') as f:
-            wcsv = csv.writer(f)
-            wcsv.writerow([j, time.time(), n_updates, sum_abs_dw, max_abs_dw])
+            # Apply timing-based attribution to upstream synapses for A2A1
+            print('Applying timing-based updates to upstream synapses...')
+            applied_updates = attribute_timing_to_upstream_synapse(
+                spike_counters['A1'],
+                spike_counters['A2'],
+                connections['A2A1'],
+                connections['X1A2'],
+                float(timing_threshold / b.ms),
+                epsilon_timing,
+                use_fast_mode=fast_timing_updates,
+                max_active_synapses=max_active_synapses,
+                time_window_ms=time_window_ms,
+                subsample_rate=subsample_rate
+            )
+
+            try:
+                w_arr = np.array(connections['X1A2'].w, dtype=float)
+                n_updates = 0
+                sum_abs_dw = 0.0
+                max_abs_dw = 0.0
+                if isinstance(applied_updates, list):
+                    for syn_idx, dw in applied_updates:
+                        try:
+                            syn_i = int(syn_idx)
+                            dwf = float(dw)
+                            w_arr[syn_i] = np.clip(w_arr[syn_i] + dwf, wmin_ee, wmax_ee)
+                            n_updates += 1
+                            sum_abs_dw += abs(dwf)
+                            if abs(dwf) > max_abs_dw:
+                                max_abs_dw = abs(dwf)
+                        except Exception:
+                            continue
+                connections['X1A2'].w = w_arr
+            except Exception:
+                n_updates = 0
+                sum_abs_dw = 0.0
+                max_abs_dw = 0.0
+            
+            with open(timing_updates_csv, 'a', newline='') as f:
+                wcsv = csv.writer(f)
+                wcsv.writerow([j, time.time(), n_updates, sum_abs_dw, max_abs_dw])
         
         neuron_groups['X1'].rates = 0*b.hertz
         net['M1'].run(resting_time)
