@@ -163,7 +163,7 @@ with open(timing_updates_csv, 'w', newline='') as f:
 if Learning == False:
     scr_e = 'v = v_reset_e'
 else:
-    tc_theta = 1e7 * b.ms
+    tc_theta = 1e5 * b.ms
     theta_plus_e = 0.05 * b.mV
     scr_e = 'v = v_reset_e; theta += theta_plus_e'
 offset = 20.0*b.mV
@@ -497,8 +497,8 @@ save_path = './weights/'
 load_path = './weights/'
 
 #the time-window of simulation
-single_example_time =   0.35 * b.second
-resting_time = 0.15 * b.second
+single_example_time =   0.7 * b.second
+resting_time = 0.3 * b.second
 
 #the the interval of process data and show information
 progress_interval = 10
@@ -519,11 +519,11 @@ if train_begin:
     neuron_groups['A3'].theta = np.load(load_path + 'theta_A3' + '_' + str(train_begin) + '.npy') *b.volt
 
 #the intensity of rate coding
-intensity_step = 0.125
-start_intensity = 0.25
+intensity_step = 0.25
+start_intensity = 0.5
 
 #the threshold of retrain
-retrain_gate = np.sum([5*feature_map_size_each_kernel[kernel] for kernel in range(kernel_num)])
+retrain_gate = np.sum([3*feature_map_size_each_kernel[kernel] for kernel in range(kernel_num)])
 
 # run the simulation and set inputs
 previous_spike_count = {}
@@ -545,9 +545,20 @@ neuron_groups['X1'].rates = 0*b.hertz
 net['M1'].run(0*b.second)
 
 start = time.time()
+
 j = train_begin
+max_retries = 30
+last_printed_j = None
+
 input_intensity = start_intensity
-while j < n_train:    
+while j < n_train:   
+    
+    print('Training iteration:', j+1, '/', n_train)
+    
+    if last_printed_j != j:
+        last_printed_j = j
+        retry_count = 0
+     
     Rates = training['x'][j%60000,:,:].reshape((n_input)) * input_intensity
 
     neuron_groups['X1'].rates = Rates*b.hertz
@@ -563,6 +574,22 @@ while j < n_train:
     spike_num = np.sum(current_spike_count['A1'])
 
     if spike_num < retrain_gate:
+        retry_count += 1
+        
+        
+        if retry_count >= max_retries:  # << added: check limit
+            print(f"  Skipping sample {j} after {retry_count} retries (spike_num={int(spike_num)} < {int(retrain_gate)})")
+            # reset for next sample
+            input_intensity = start_intensity
+            neuron_groups['X1'].rates = 0*b.hertz
+            neuron_groups['A3'].v = v_rest_e - 40. * b.mV
+            neuron_groups['A2'].v = v_rest_e - 40. * b.mV
+            neuron_groups['A1'].v = v_rest_e - 40. * b.mV
+            net['M1'].run(resting_time)
+            j += 1  # << skip to next sample
+            continue  # << go to top of loop
+        
+        
         input_intensity += intensity_step
         neuron_groups['X1'].rates = 0*b.hertz
         net['M1'].run(resting_time)
@@ -662,6 +689,15 @@ while j < n_train:
         input_intensity = start_intensity
 
         j += 1
+        
+        if j%20 == 0:
+            print("=== Diagnostics at every 20 iterations===")
+            print(f"Mean theta A1: {np.mean(neuron_groups['A1'].theta/b.mV):.3f} mV")
+            print(f"Max theta A1: {np.max(neuron_groups['A1'].theta/b.mV):.3f} mV")
+            print(f"Mean weight X1A3: {np.mean(connections['X1A3'].w):.6f}")
+            print(f"Mean weight A3A2: {np.mean(connections['A3A2'].w):.6f}")
+            print(f"Mean weight A2A1: {np.mean(connections['A2A1'].w):.6f}")
+            print(f"Mean eta_p X1A3: {np.mean(connections['X1A3'].eta_p):.6f}")
         
         if j % progress_interval == 0:
             print ('Progress: ', j, '/', n_train, '(', time.time() - start, 'seconds)')
