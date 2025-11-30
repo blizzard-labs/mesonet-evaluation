@@ -177,13 +177,22 @@ neuron_groups['A1'].theta = np.ones((neuron_num)) * 20.0*b.mV
 # create output layer (A2)
 n_output = 10
 # reuse excitatory neuron equations; keep theta adaptation for consistency
-neuron_groups['A2'] = b.NeuronGroup(n_output, neuron_eqs_e, method='euler', threshold=thresh_e, refractory=refrac_e, reset=scr_e)
+
+thresh_A2 = 'v>( 10*mV - offset + ' + str(v_thresh_e/b.mV) + '*mV' + ')'
+
+neuron_groups['A2'] = b.NeuronGroup(
+        n_output, neuron_eqs_e, method='euler',
+        threshold=thresh_A2,
+        refractory=refrac_e,
+        reset = 'v = v_reset_e'
+)
+
+#neuron_groups['A2'] = b.NeuronGroup(n_output, neuron_eqs_e, method='euler', threshold=thresh_e, refractory=refrac_e, reset=scr_e)
 neuron_groups['A2'].v = v_rest_e - 40. * b.mV
 neuron_groups['A2'].theta = np.ones((n_output)) * 10.0*b.mV
 
-#! set tonic input to output layer
-#A2_tonic = b.TimedArray(np.ones(n_output) * 0.02, dt=1*b.ms)
-neuron_groups['A2'].run_regularly('ge += 0.01', dt=5*b.ms)
+
+#neuron_groups['A2'].run_regularly('ge += 0.01', dt=5*b.ms)
     
 #create connections AA
 start = time.time()
